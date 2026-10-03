@@ -1,0 +1,1764 @@
+openapi: 3.1.0
+info:
+  title: Enterprise Real-Time E-Commerce Order Intelligence API & Event Catalog
+  version: 1.0.0
+  description: |
+    # Enterprise Real-Time E-Commerce Order Intelligence Platform
+
+    Welcome to the OpenAPI / Swagger specification for the **Enterprise Real-Time E-Commerce Order Intelligence Platform**.
+
+    This specification documents:
+    - **Event Schemas**: Polymorphic event definitions for all 10 domain events processed by the Apache Beam pipeline over Apache Flink.
+    - **Event Ingestion Gateway**: HTTP/Webhook endpoints to ingest domain events directly into Kafka (`orders`, `payments`, `customer-events`).
+    - **Analytics & Metrics API**: Query windowed revenue aggregations, order velocity, payment failure rates, and cancellation metrics stored in PostgreSQL.
+    - **Risk & Fraud Signals API**: Stateful customer risk scoring, payment failure bursts, high-velocity order attempts, and escalations.
+    - **Dead Letter Queue (DLQ) API**: Inspection, filtering, and replaying of unparseable or rule-violating records (`dlq_events`).
+    - **Traffic Simulator Control API**: Dynamic management and scenario triggering for synthetic load generation (up to 50k events/sec).
+    - **Pipeline Observability & Flink API**: Streaming job health, checkpoint statistics, processing lag, and watermarks.
+
+    ---
+    ### System Architecture & Pipeline Flow
+    1. **Ingestion**: Raw JSON events arrive via Kafka topics or HTTP Ingestion Gateway.
+    2. **Parse & Validate**: `ParseEventFn` deserializes events into `BaseEvent` subclasses; `ValidateEventFn` enforces business invariants (failures routed to `dlq`).
+    3. **Watermarking & Dedup**: `AssignEventTimestampFn` watermarks by event time; `DeduplicateEventsFn` ensures exactly-once semantics via stateful TTL deduplication (24h).
+    4. **Enrichment**: `EnrichOrderFn` joins side-input product catalog metadata.
+    5. **Aggregations & Risk**: 5-minute tumbling combiner aggregates revenue (`AggregatedMetric`), while stateful keyed stream computes customer risk scores (`RiskSignal`).
+    6. **Sinks**: PostgreSQL (`HikariCP`), Kafka output topics (`alerts`, `metrics-output`, `dlq`), and S3/local object storage.
+
+  contact:
+    name: Platform Engineering Team
+    email: platform-eng@enterprise.internal
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+
+servers:
+  - url: http://localhost:8080/v1
+    description: Local Development Gateway
+  - url: http://localhost:8081
+    description: Apache Flink Web Dashboard & REST API
+  - url: https://api.staging.enterprise.internal/v1
+    description: Staging Environment (Kubernetes)
+  - url: https://api.production.enterprise.internal/v1
+    description: Production Environment (Kubernetes)
+
+tags:
+  - name: Event Ingestion
+    description: Ingest e-commerce events directly into Kafka topics (Orders, Payments, Customer Interactions)
+  - name: Analytics & Metrics
+    description: Query windowed aggregated business metrics, revenue rollups, and operational KPIs
+  - name: Risk & Fraud Signals
+    description: Real-time fraud detection signals, risk escalation flags, and customer velocity scores
+  - name: Dead Letter Queue (DLQ)
+    description: Dead-letter queue inspection, search, error categorization, and event replay
+  - name: Traffic Simulator
+    description: Control synthetic load generator, configure failure rates, and trigger anomaly scenarios
+  - name: Pipeline Observability
+    description: Flink runner job status, checkpoint metrics, processing lag, and cluster health
+  - name: Schema Catalog
+    description: Discover JSON Schemas and metadata for all 10 domain event types
+
+paths:
+
+  # ─── EVENT INGESTION ────────────────────────────────────────────────────────
+  /events/orders:
+    post:
+      tags:
+        - Event Ingestion
+      summary: Ingest an Order Lifecycle Event
+      description: |
+        Publishes an order lifecycle event (`ORDER_CREATED`, `ORDER_UPDATED`, `ORDER_CANCELLED`, `SHIPMENT_CREATED`, `SHIPMENT_DELIVERED`) to the `orders` Kafka topic.
+      operationId: ingestOrderEvent
+      requestBody:
+        required: true
+        description: Order domain event payload
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/OrderCreatedEvent'
+                - $ref: '#/components/schemas/OrderUpdatedEvent'
+                - $ref: '#/components/schemas/OrderCancelledEvent'
+                - $ref: '#/components/schemas/ShipmentCreatedEvent'
+                - $ref: '#/components/schemas/ShipmentDeliveredEvent'
+            examples:
+              OrderCreated:
+                summary: Order Created Event
+                value:
+                  event_id: "550e8400-e29b-41d4-a716-446655440000"
+                  event_type: "ORDER_CREATED"
+                  event_version: 1
+                  schema_version: "1.0"
+                  event_time: "2026-08-27T10:15:30.000Z"
+                  ingestion_time: "2026-08-27T10:15:30.150Z"
+                  correlation_id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+                  producer_id: "order-service-pod-01"
+                  customer_id: "CUST-98234"
+                  order_id: "ORD-20260827-0099"
+                  product_id: "PROD-4029"
+                  region: "IN-SOUTH"
+                  currency: "INR"
+                  amount: 2499.00
+                  item_count: 3
+                  payment_method: "UPI"
+                  metadata:
+                    channel: "mobile_app"
+                    app_version: "v4.12.0"
+      responses:
+        '202':
+          description: Event accepted and enqueued to Kafka topic `orders`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestionResponse'
+        '400':
+          description: Invalid payload or schema validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Kafka broker unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /events/payments:
+    post:
+      tags:
+        - Event Ingestion
+      summary: Ingest a Payment Event
+      description: |
+        Publishes a payment authorization or payment failure event (`PAYMENT_AUTHORIZED`, `PAYMENT_FAILED`) to the `payments` Kafka topic.
+      operationId: ingestPaymentEvent
+      requestBody:
+        required: true
+        description: Payment domain event payload
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/PaymentAuthorizedEvent'
+                - $ref: '#/components/schemas/PaymentFailedEvent'
+            examples:
+              PaymentAuthorized:
+                summary: Payment Authorized Example
+                value:
+                  event_id: "71a2be10-67c4-4b51-9e51-c0032bf28a99"
+                  event_type: "PAYMENT_AUTHORIZED"
+                  event_version: 1
+                  schema_version: "1.0"
+                  event_time: "2026-08-27T10:15:32.000Z"
+                  ingestion_time: "2026-08-27T10:15:32.050Z"
+                  correlation_id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+                  producer_id: "payment-gateway-webhook"
+                  customer_id: "CUST-98234"
+                  order_id: "ORD-20260827-0099"
+                  region: "IN-SOUTH"
+                  currency: "INR"
+                  amount: 2499.00
+                  payment_gateway: "RAZORPAY"
+                  transaction_reference: "txn_rzp_993821038"
+                  metadata:
+                    ip_address: "103.21.12.45"
+              PaymentFailed:
+                summary: Payment Failed Example
+                value:
+                  event_id: "82b3cf21-78d5-5c62-af62-d1143cf39baa"
+                  event_type: "PAYMENT_FAILED"
+                  event_version: 1
+                  schema_version: "1.0"
+                  event_time: "2026-08-27T10:15:35.000Z"
+                  ingestion_time: "2026-08-27T10:15:35.080Z"
+                  correlation_id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+                  producer_id: "payment-gateway-webhook"
+                  customer_id: "CUST-98234"
+                  order_id: "ORD-20260827-0099"
+                  region: "IN-SOUTH"
+                  currency: "INR"
+                  amount: 2499.00
+                  failure_code: "INSUFFICIENT_FUNDS"
+                  failure_reason: "Customer account balance too low"
+      responses:
+        '202':
+          description: Event accepted and enqueued to Kafka topic `payments`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestionResponse'
+        '400':
+          description: Invalid payload or validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /events/customer:
+    post:
+      tags:
+        - Event Ingestion
+      summary: Ingest Customer Clickstream / Cart Event
+      description: |
+        Publishes user interaction events (`CUSTOMER_VIEWED_PRODUCT`, `PRODUCT_ADDED_TO_CART`, `PRODUCT_REMOVED_FROM_CART`) to the `customer-events` Kafka topic.
+      operationId: ingestCustomerEvent
+      requestBody:
+        required: true
+        description: Customer interaction event payload
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/CustomerViewedProductEvent'
+                - $ref: '#/components/schemas/ProductAddedToCartEvent'
+                - $ref: '#/components/schemas/ProductRemovedFromCartEvent'
+            examples:
+              ProductAddedToCart:
+                summary: Product Added to Cart Example
+                value:
+                  event_id: "661f7e02-441a-4d43-85bb-4cbca75a34e1"
+                  event_type: "PRODUCT_ADDED_TO_CART"
+                  event_version: 1
+                  schema_version: "1.0"
+                  event_time: "2026-08-27T10:12:00.000Z"
+                  ingestion_time: "2026-08-27T10:12:00.120Z"
+                  correlation_id: "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d"
+                  producer_id: "web-frontend-tracker"
+                  customer_id: "CUST-98234"
+                  product_id: "PROD-4029"
+                  region: "IN-SOUTH"
+                  currency: "INR"
+                  amount: 2499.00
+                  quantity: 1
+      responses:
+        '202':
+          description: Event accepted and enqueued to Kafka topic `customer-events`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestionResponse'
+        '400':
+          description: Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /events/batch:
+    post:
+      tags:
+        - Event Ingestion
+      summary: Batch Ingest Mixed Events
+      description: |
+        Accepts an array of mixed domain events and routes each to its respective Kafka topic based on `event_type`.
+      operationId: ingestEventBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - events
+              properties:
+                events:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AnyDomainEvent'
+                  minItems: 1
+                  maxItems: 500
+      responses:
+        '207':
+          description: Multi-status batch processing summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchIngestionResponse'
+
+  # ─── ANALYTICS & METRICS ───────────────────────────────────────────────────
+  /analytics/metrics:
+    get:
+      tags:
+        - Analytics & Metrics
+      summary: Query Windowed Aggregated Metrics
+      description: |
+        Retrieves real-time aggregated metrics computed by Beam tumbling windows and stored in PostgreSQL table `aggregated_metrics`.
+      operationId: getAggregatedMetrics
+      parameters:
+        - name: start_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Window start timestamp (ISO-8601 UTC)
+          example: "2026-08-27T00:00:00Z"
+        - name: end_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Window end timestamp (ISO-8601 UTC)
+          example: "2026-08-27T23:59:59Z"
+        - name: region
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by geographic region
+          example: "IN-SOUTH"
+        - name: event_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EventType'
+          description: Filter by event type
+        - name: window_type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [TUMBLING_5_MIN, SESSION_30_MIN, DAILY_ROLLUP]
+          description: Aggregation window window type
+          example: "TUMBLING_5_MIN"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 1000
+          description: Max records to return
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+          description: Pagination offset
+      responses:
+        '200':
+          description: List of aggregated metric records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                    example: 128
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AggregatedMetric'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /analytics/metrics/latest:
+    get:
+      tags:
+        - Analytics & Metrics
+      summary: Get Latest Metrics Summary
+      description: |
+        Returns the latest 5-minute window revenue and order statistics across all regions.
+      operationId: getLatestMetrics
+      responses:
+        '200':
+          description: Current rolling window summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  window_start:
+                    type: string
+                    format: date-time
+                    example: "2026-08-27T10:10:00.000Z"
+                  window_end:
+                    type: string
+                    format: date-time
+                    example: "2026-08-27T10:15:00.000Z"
+                  total_platform_revenue:
+                    type: number
+                    format: double
+                    example: 1458920.50
+                  total_orders:
+                    type: integer
+                    example: 1240
+                  total_failed_payments:
+                    type: integer
+                    example: 32
+                  payment_failure_rate_pct:
+                    type: number
+                    format: float
+                    example: 2.58
+                  by_region:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AggregatedMetric'
+
+  # ─── RISK & FRAUD SIGNALS ──────────────────────────────────────────────────
+  /risk/signals:
+    get:
+      tags:
+        - Risk & Fraud Signals
+      summary: Query Customer Risk & Fraud Signals
+      description: |
+        Returns real-time risk signals emitted by the `CustomerRiskDetectorFn` stateful Beam transform.
+      operationId: getRiskSignals
+      parameters:
+        - name: customer_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by customer identifier
+          example: "CUST-98234"
+        - name: escalated_only
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Filter only escalated high-risk signals
+        - name: min_risk_score
+          in: query
+          required: false
+          schema:
+            type: number
+            format: double
+            minimum: 0.0
+            maximum: 100.0
+          description: Minimum risk score threshold
+          example: 75.0
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 500
+      responses:
+        '200':
+          description: List of detected risk signals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                    example: 14
+                  signals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RiskSignal'
+
+  /risk/signals/{customerId}:
+    get:
+      tags:
+        - Risk & Fraud Signals
+      summary: Get Risk History for a Customer
+      description: |
+        Retrieves real-time fraud history, order attempt velocity, and payment failure trajectory for a specific customer ID.
+      operationId: getCustomerRiskProfile
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique customer identifier
+          example: "CUST-98234"
+      responses:
+        '200':
+          description: Customer risk profile and signal timeline
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  customer_id:
+                    type: string
+                    example: "CUST-98234"
+                  current_risk_score:
+                    type: number
+                    format: double
+                    example: 85.5
+                  is_flagged:
+                    type: boolean
+                    example: true
+                  recent_signals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RiskSignal'
+        '404':
+          description: Customer not found or no risk signals recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /risk/signals/{customerId}/resolve:
+    post:
+      tags:
+        - Risk & Fraud Signals
+      summary: Resolve / De-escalate a Customer Risk Flag
+      description: |
+        Marks an escalated risk signal as reviewed by human fraud team, recording resolution notes.
+      operationId: resolveCustomerRisk
+      parameters:
+        - name: customerId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "CUST-98234"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - resolution
+                - reviewer_id
+              properties:
+                resolution:
+                  type: string
+                  enum: [FALSE_POSITIVE, CONFIRMED_FRAUD, ACCOUNT_LOCKED, WHITELISTED]
+                  example: "FALSE_POSITIVE"
+                reviewer_id:
+                  type: string
+                  example: "analyst-08"
+                notes:
+                  type: string
+                  example: "Verified customer phone confirmation."
+      responses:
+        '200':
+          description: Risk status updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  customer_id:
+                    type: string
+                    example: "CUST-98234"
+                  status:
+                    type: string
+                    example: "RESOLVED"
+                  updated_at:
+                    type: string
+                    format: date-time
+                    example: "2026-08-27T10:30:00.000Z"
+
+  # ─── DEAD LETTER QUEUE (DLQ) ───────────────────────────────────────────────
+  /dlq/events:
+    get:
+      tags:
+        - Dead Letter Queue (DLQ)
+      summary: List and Filter DLQ Events
+      description: |
+        Inspect records that failed during streaming processing due to JSON parsing, schema validation, business rule violations, or sink write issues.
+      operationId: listDlqEvents
+      parameters:
+        - name: error_category
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ErrorCategory'
+          description: Categorization filter
+          example: "BUSINESS_RULE_VIOLATION"
+        - name: kafka_topic
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Source topic name
+          example: "orders"
+        - name: pipeline_stage
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Pipeline transform stage name
+          example: "ValidateEventFn"
+        - name: start_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: end_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Paginated list of DLQ envelope records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                    example: 45
+                  records:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DlqEnvelope'
+
+  /dlq/events/{id}:
+    get:
+      tags:
+        - Dead Letter Queue (DLQ)
+      summary: Get Single DLQ Event Details
+      description: |
+        Retrieves full raw payload, stack trace, Kafka coordinates, and pipeline failure stage for an individual DLQ event.
+      operationId: getDlqEventById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 1042
+      responses:
+        '200':
+          description: Detailed DLQ envelope record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DlqEnvelope'
+        '404':
+          description: DLQ record not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dlq/replay:
+    post:
+      tags:
+        - Dead Letter Queue (DLQ)
+      summary: Replay DLQ Events to Kafka Source Topics
+      description: |
+        Reprocesses and republishes corrected or recovered DLQ records back into the specified ingestion Kafka topic.
+      operationId: replayDlqEvents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplayDlqRequest'
+      responses:
+        '200':
+          description: Replay result summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayDlqResponse'
+        '400':
+          description: Invalid replay criteria
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ─── TRAFFIC SIMULATOR CONTROL ─────────────────────────────────────────────
+  /simulator/status:
+    get:
+      tags:
+        - Traffic Simulator
+      summary: Get Simulator Status & Stats
+      description: |
+        Returns the real-time execution state of the synthetic event generator, current throughput rate, and total events emitted.
+      operationId: getSimulatorStatus
+      responses:
+        '200':
+          description: Simulator execution status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulatorStatus'
+
+  /simulator/start:
+    post:
+      tags:
+        - Traffic Simulator
+      summary: Start Traffic Simulator
+      description: |
+        Launches the synthetic e-commerce event loop with configurable rate, fault injection rates, customer pool, and regions.
+      operationId: startSimulator
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulatorConfig'
+            example:
+              events_per_second: 250
+              duration_seconds: 600
+              customer_count: 5000
+              product_count: 1000
+              regions: "IN-SOUTH,IN-NORTH,US-EAST,EU-WEST"
+              late_event_rate: 0.05
+              max_late_seconds: 120
+              duplicate_rate: 0.02
+              out_of_order_rate: 0.10
+              malformed_rate: 0.01
+              payment_failure_rate: 0.15
+              cancellation_rate: 0.05
+              seed: 42
+              bootstrap_servers: "localhost:9092"
+      responses:
+        '200':
+          description: Simulator started successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulatorStatus'
+        '409':
+          description: Simulator is already running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /simulator/stop:
+    post:
+      tags:
+        - Traffic Simulator
+      summary: Stop Traffic Simulator
+      description: |
+        Gracefully terminates the background traffic simulator thread pool and flushes Kafka producer buffers.
+      operationId: stopSimulator
+      responses:
+        '200':
+          description: Simulator stopped
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "STOPPED"
+                  total_events_sent:
+                    type: integer
+                    example: 74920
+                  uptime_seconds:
+                    type: integer
+                    example: 300
+
+  /simulator/scenarios/fraud-burst:
+    post:
+      tags:
+        - Traffic Simulator
+      summary: Inject Fraud Burst Scenario
+      description: |
+        Triggers a synthetic high-velocity anomaly (rapid-fire payment failures and high-value orders) for a targeted customer ID to test `CustomerRiskDetectorFn`.
+      operationId: triggerFraudBurstScenario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - customer_id
+              properties:
+                customer_id:
+                  type: string
+                  example: "CUST-FRAUD-BURST-01"
+                payment_failures_count:
+                  type: integer
+                  default: 5
+                  example: 6
+                order_attempts_count:
+                  type: integer
+                  default: 8
+                  example: 8
+                total_burst_amount:
+                  type: number
+                  format: double
+                  example: 150000.00
+      responses:
+        '202':
+          description: Fraud burst scenario generated and dispatched to Kafka
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "INJECTED"
+                  events_emitted:
+                    type: integer
+                    example: 14
+                  target_customer:
+                    type: string
+                    example: "CUST-FRAUD-BURST-01"
+
+  # ─── PIPELINE OBSERVABILITY ────────────────────────────────────────────────
+  /pipeline/health:
+    get:
+      tags:
+        - Pipeline Observability
+      summary: Pipeline Readiness & Health Probe
+      description: |
+        Checks connectivity to Kafka brokers, PostgreSQL database pool, and Flink JobManager.
+      operationId: checkPipelineHealth
+      responses:
+        '200':
+          description: System healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineHealth'
+        '503':
+          description: One or more components degraded or down
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineHealth'
+
+  /pipeline/jobs:
+    get:
+      tags:
+        - Pipeline Observability
+      summary: List Flink Streaming Jobs
+      description: |
+        Returns active Apache Beam pipeline jobs running on the Apache Flink 2.2.1 cluster.
+      operationId: listPipelineJobs
+      responses:
+        '200':
+          description: List of jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FlinkJob'
+
+  /pipeline/jobs/{jobId}/metrics:
+    get:
+      tags:
+        - Pipeline Observability
+      summary: Get Job Performance & Checkpoint Metrics
+      description: |
+        Queries Flink REST API for current watermarks, consumer lag, checkpoint duration, and records/second throughput.
+      operationId: getJobMetrics
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "70a9310d5402928509c9164c0e64ff4b"
+      responses:
+        '200':
+          description: Live streaming metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineMetrics'
+
+  # ─── SCHEMA CATALOG ────────────────────────────────────────────────────────
+  /schema/catalog:
+    get:
+      tags:
+        - Schema Catalog
+      summary: List All Registered Domain Event Schemas
+      description: |
+        Returns metadata, Kafka topics, and schema versions for all 10 domain event types supported by the platform.
+      operationId: listEventSchemas
+      responses:
+        '200':
+          description: Event schema catalog metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EventSchemaMetadata'
+
+  /schema/catalog/{eventType}:
+    get:
+      tags:
+        - Schema Catalog
+      summary: Get JSON Schema for Event Type
+      description: |
+        Retrieves the exact JSON Schema (Draft 2020-12) definition for a specific domain event type.
+      operationId: getEventSchemaByType
+      parameters:
+        - name: eventType
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/EventType'
+          example: "ORDER_CREATED"
+      responses:
+        '200':
+          description: JSON Schema definition
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+components:
+  schemas:
+
+    # ─── ENUMS ───────────────────────────────────────────────────────────────
+    EventType:
+      type: string
+      enum:
+        - ORDER_CREATED
+        - ORDER_UPDATED
+        - PAYMENT_AUTHORIZED
+        - PAYMENT_FAILED
+        - ORDER_CANCELLED
+        - SHIPMENT_CREATED
+        - SHIPMENT_DELIVERED
+        - CUSTOMER_VIEWED_PRODUCT
+        - PRODUCT_ADDED_TO_CART
+        - PRODUCT_REMOVED_FROM_CART
+      description: |
+        Enumeration of all 10 domain event types supported by the platform.
+        - `ORDER_CREATED`: Order placed by customer (topic: `orders`)
+        - `ORDER_UPDATED`: Order status updated (topic: `orders`)
+        - `PAYMENT_AUTHORIZED`: Payment succeeded (topic: `payments`)
+        - `PAYMENT_FAILED`: Payment failed/declined (topic: `payments`)
+        - `ORDER_CANCELLED`: Order cancelled by customer/system (topic: `orders`)
+        - `SHIPMENT_CREATED`: Package dispatched with carrier (topic: `orders`)
+        - `SHIPMENT_DELIVERED`: Package delivered to destination (topic: `orders`)
+        - `CUSTOMER_VIEWED_PRODUCT`: Product view impression (topic: `customer-events`)
+        - `PRODUCT_ADDED_TO_CART`: Product added to shopping cart (topic: `customer-events`)
+        - `PRODUCT_REMOVED_FROM_CART`: Item removed from cart (topic: `customer-events`)
+
+    ErrorCategory:
+      type: string
+      enum:
+        - PARSE_ERROR
+        - SCHEMA_VALIDATION_ERROR
+        - BUSINESS_RULE_VIOLATION
+        - DATA_QUALITY_WARNING
+        - SINK_WRITE_FAILURE
+      description: |
+        Categorization of streaming errors routed to the Dead Letter Queue (`dlq_events`).
+        - `PARSE_ERROR`: Corrupted bytes or unparseable JSON
+        - `SCHEMA_VALIDATION_ERROR`: Missing mandatory fields or malformed UUIDs
+        - `BUSINESS_RULE_VIOLATION`: Invariant violated (e.g. negative amount, zero quantity)
+        - `DATA_QUALITY_WARNING`: Non-fatal clock skew or anomalies
+        - `SINK_WRITE_FAILURE`: Database connection or constraint failure
+
+    # ─── BASE EVENT SCHEMA ───────────────────────────────────────────────────
+    BaseEvent:
+      type: object
+      required:
+        - event_id
+        - event_type
+        - event_version
+        - schema_version
+        - event_time
+        - ingestion_time
+        - correlation_id
+        - producer_id
+        - customer_id
+      properties:
+        event_id:
+          type: string
+          format: uuid
+          description: Unique event identifier (UUID v4)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        event_type:
+          $ref: '#/components/schemas/EventType'
+        event_version:
+          type: integer
+          default: 1
+          description: Monotonic event version
+          example: 1
+        schema_version:
+          type: string
+          default: "1.0"
+          description: Semantic schema version
+          example: "1.0"
+        event_time:
+          type: string
+          format: date-time
+          description: Source generation timestamp in UTC (event-time for watermarking)
+          example: "2026-08-27T10:15:30.000Z"
+        ingestion_time:
+          type: string
+          format: date-time
+          description: Gateway arrival timestamp in UTC
+          example: "2026-08-27T10:15:30.150Z"
+        correlation_id:
+          type: string
+          format: uuid
+          description: Distributed tracing / session correlation ID
+          example: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        producer_id:
+          type: string
+          description: Originating service pod or client identifier
+          example: "order-service-pod-01"
+        customer_id:
+          type: string
+          description: Customer unique identifier
+          example: "CUST-98234"
+        order_id:
+          type: string
+          nullable: true
+          description: Order ID if applicable
+          example: "ORD-20260827-0099"
+        product_id:
+          type: string
+          nullable: true
+          description: Product SKU ID if applicable
+          example: "PROD-4029"
+        region:
+          type: string
+          nullable: true
+          description: Geographic operational region
+          example: "IN-SOUTH"
+        currency:
+          type: string
+          default: "INR"
+          description: ISO-4217 currency code
+          example: "INR"
+        amount:
+          type: number
+          format: double
+          nullable: true
+          description: Monetary amount associated with event
+          example: 2499.00
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+          description: Arbitrary key-value metadata tags
+          example:
+            device: "Android"
+            app_version: "v4.12.0"
+
+    # ─── SPECIFIC EVENT SUBTYPES ─────────────────────────────────────────────
+    OrderCreatedEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - order_id
+            - amount
+            - item_count
+            - payment_method
+          properties:
+            item_count:
+              type: integer
+              minimum: 1
+              description: Total quantity of items in the order
+              example: 3
+            payment_method:
+              type: string
+              description: Selected payment instrument (UPI, CREDIT_CARD, COD, NETBANKING)
+              example: "UPI"
+
+    OrderUpdatedEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - order_id
+            - status
+          properties:
+            status:
+              type: string
+              description: New order status (e.g., CONFIRMED, PROCESSING, PACKED)
+              example: "CONFIRMED"
+
+    OrderCancelledEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - order_id
+            - cancellation_reason
+          properties:
+            cancellation_reason:
+              type: string
+              description: Reason for order cancellation
+              example: "Customer requested cancellation before shipment"
+
+    PaymentAuthorizedEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - order_id
+            - amount
+            - payment_gateway
+            - transaction_reference
+          properties:
+            payment_gateway:
+              type: string
+              description: Gateway processor name (RAZORPAY, STRIPE, PAYTM)
+              example: "RAZORPAY"
+            transaction_reference:
+              type: string
+              description: External transaction ID from payment gateway
+              example: "txn_rzp_993821038"
+
+    PaymentFailedEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - order_id
+            - failure_code
+            - failure_reason
+          properties:
+            failure_code:
+              type: string
+              description: Normalized error code
+              example: "INSUFFICIENT_FUNDS"
+            failure_reason:
+              type: string
+              description: Human-readable decline explanation
+              example: "Customer account balance too low"
+
+    ShipmentCreatedEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - order_id
+            - carrier
+            - tracking_number
+          properties:
+            carrier:
+              type: string
+              description: Logistics carrier name (BLUE_DART, DELHI VERY, FEDEX, DHL)
+              example: "BLUE_DART"
+            tracking_number:
+              type: string
+              description: Logistics tracking AWB number
+              example: "BD-99482910"
+
+    ShipmentDeliveredEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - order_id
+            - delivery_status
+          properties:
+            delivery_status:
+              type: string
+              description: Delivery outcome status (e.g., DELIVERED_TO_RECIPIENT)
+              example: "DELIVERED_TO_RECIPIENT"
+
+    CustomerViewedProductEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - product_id
+            - duration_seconds
+          properties:
+            duration_seconds:
+              type: integer
+              minimum: 0
+              description: Product page dwell time in seconds
+              example: 45
+
+    ProductAddedToCartEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - product_id
+            - quantity
+          properties:
+            quantity:
+              type: integer
+              minimum: 1
+              description: Quantity added to shopping cart
+              example: 2
+
+    ProductRemovedFromCartEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required:
+            - product_id
+            - quantity
+          properties:
+            quantity:
+              type: integer
+              minimum: 1
+              description: Quantity removed from shopping cart
+              example: 1
+
+    AnyDomainEvent:
+      oneOf:
+        - $ref: '#/components/schemas/OrderCreatedEvent'
+        - $ref: '#/components/schemas/OrderUpdatedEvent'
+        - $ref: '#/components/schemas/OrderCancelledEvent'
+        - $ref: '#/components/schemas/PaymentAuthorizedEvent'
+        - $ref: '#/components/schemas/PaymentFailedEvent'
+        - $ref: '#/components/schemas/ShipmentCreatedEvent'
+        - $ref: '#/components/schemas/ShipmentDeliveredEvent'
+        - $ref: '#/components/schemas/CustomerViewedProductEvent'
+        - $ref: '#/components/schemas/ProductAddedToCartEvent'
+        - $ref: '#/components/schemas/ProductRemovedFromCartEvent'
+      discriminator:
+        propertyName: event_type
+        mapping:
+          ORDER_CREATED: '#/components/schemas/OrderCreatedEvent'
+          ORDER_UPDATED: '#/components/schemas/OrderUpdatedEvent'
+          PAYMENT_AUTHORIZED: '#/components/schemas/PaymentAuthorizedEvent'
+          PAYMENT_FAILED: '#/components/schemas/PaymentFailedEvent'
+          ORDER_CANCELLED: '#/components/schemas/OrderCancelledEvent'
+          SHIPMENT_CREATED: '#/components/schemas/ShipmentCreatedEvent'
+          SHIPMENT_DELIVERED: '#/components/schemas/ShipmentDeliveredEvent'
+          CUSTOMER_VIEWED_PRODUCT: '#/components/schemas/CustomerViewedProductEvent'
+          PRODUCT_ADDED_TO_CART: '#/components/schemas/ProductAddedToCartEvent'
+          PRODUCT_REMOVED_FROM_CART: '#/components/schemas/ProductRemovedFromCartEvent'
+
+    # ─── AGGREGATED METRIC & RISK SIGNAL SCHEMAS ────────────────────────────
+    AggregatedMetric:
+      type: object
+      description: Result model for Beam windowed metric aggregations stored in PostgreSQL `aggregated_metrics`.
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 108
+        window_start:
+          type: string
+          format: date-time
+          description: UTC timestamp of window start
+          example: "2026-08-27T10:10:00.000Z"
+        window_end:
+          type: string
+          format: date-time
+          description: UTC timestamp of window end
+          example: "2026-08-27T10:15:00.000Z"
+        window_type:
+          type: string
+          description: Type of Beam window (e.g. TUMBLING_5_MIN, SESSION_30_MIN)
+          example: "TUMBLING_5_MIN"
+        region:
+          type: string
+          description: Geographic partition region
+          example: "IN-SOUTH"
+        event_type:
+          type: string
+          description: Event type aggregation filter
+          example: "ORDER_CREATED"
+        total_revenue:
+          type: number
+          format: double
+          description: Sum of authorized orders revenue
+          example: 495000.00
+        order_count:
+          type: integer
+          format: int64
+          description: Total count of completed orders in window
+          example: 198
+        avg_order_value:
+          type: number
+          format: double
+          description: Average order value (total_revenue / order_count)
+          example: 2500.00
+        failed_payment_count:
+          type: integer
+          format: int64
+          description: Total payment failures observed
+          example: 12
+        failed_payment_rate:
+          type: number
+          format: double
+          description: Fraction of attempted payments that failed (0.0 - 1.0)
+          example: 0.057
+        cancellation_count:
+          type: integer
+          format: int64
+          description: Orders cancelled in window
+          example: 4
+        unique_customers:
+          type: integer
+          format: int64
+          description: Count of unique active customers
+          example: 172
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          example: "2026-08-27T10:15:05.120Z"
+
+    RiskSignal:
+      type: object
+      description: Signal emitted by customer risk detection stateful DoFn (`CustomerRiskDetectorFn`).
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 54
+        customer_id:
+          type: string
+          description: Flagged customer identifier
+          example: "CUST-98234"
+        risk_score:
+          type: number
+          format: double
+          description: Computed composite risk score (0.0 to 100.0)
+          example: 87.5
+        payment_failure_count:
+          type: integer
+          description: Rolling payment failure count in last hour
+          example: 5
+        order_attempt_count:
+          type: integer
+          description: Rolling order attempts count in last hour
+          example: 9
+        total_amount_last_1hr:
+          type: number
+          format: double
+          description: Total aggregate transaction amount in last hour
+          example: 145000.00
+        signal_timestamp:
+          type: string
+          format: date-time
+          description: UTC timestamp when risk threshold was exceeded
+          example: "2026-08-27T10:18:22.000Z"
+        escalated:
+          type: boolean
+          description: True if risk score exceeded threshold (score >= 70) and alert was published
+          example: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          example: "2026-08-27T10:18:22.050Z"
+
+    # ─── DEAD LETTER QUEUE (DLQ) ENVELOPE ─────────────────────────────────────
+    DlqEnvelope:
+      type: object
+      description: Envelope for dead-letter queue (DLQ) records containing original raw event payload and failure metadata.
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 1042
+        correlation_id:
+          type: string
+          format: uuid
+          nullable: true
+          example: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        original_payload:
+          type: string
+          description: Raw unparsed or invalid JSON payload string
+          example: "{\"event_id\":\"550e8400...\",\"event_type\":\"ORDER_CREATED\",\"amount\":-50.0}"
+        error_category:
+          $ref: '#/components/schemas/ErrorCategory'
+        error_code:
+          type: string
+          description: Specific validation or parsing error code
+          example: "INVALID_NEGATIVE_AMOUNT"
+        error_message:
+          type: string
+          description: Human-readable error diagnostic
+          example: "Order amount must be positive: -50.0"
+        stack_trace:
+          type: string
+          nullable: true
+          description: Stack trace if exception was thrown
+        pipeline_stage:
+          type: string
+          description: Beam DoFn transform stage where failure occurred
+          example: "ValidateEventFn"
+        processing_timestamp:
+          type: string
+          format: date-time
+          example: "2026-08-27T10:15:30.220Z"
+        kafka_topic:
+          type: string
+          description: Inbound Kafka topic where record was consumed
+          example: "orders"
+        kafka_partition:
+          type: integer
+          description: Kafka partition number
+          example: 1
+        kafka_offset:
+          type: integer
+          format: int64
+          description: Kafka message offset
+          example: 981240
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          example: "2026-08-27T10:15:30.250Z"
+
+    # ─── SIMULATOR CONFIG & STATUS ───────────────────────────────────────────
+    SimulatorConfig:
+      type: object
+      description: CLI and API options for configuring synthetic load generation.
+      properties:
+        events_per_second:
+          type: integer
+          default: 100
+          description: Target events per second throughput rate
+          example: 100
+        duration_seconds:
+          type: integer
+          default: 0
+          description: Duration in seconds (0 = run indefinitely until stopped)
+          example: 300
+        customer_count:
+          type: integer
+          default: 1000
+          description: Size of synthetic customer ID pool
+          example: 1000
+        product_count:
+          type: integer
+          default: 500
+          description: Size of synthetic product SKU pool
+          example: 500
+        regions:
+          type: string
+          default: "IN-SOUTH,IN-NORTH,US-EAST,EU-WEST"
+          description: Comma-separated geographic regions
+          example: "IN-SOUTH,IN-NORTH,US-EAST,EU-WEST"
+        late_event_rate:
+          type: number
+          format: double
+          default: 0.05
+          description: Fraction of events that arrive late (0.0 - 1.0)
+          example: 0.05
+        max_late_seconds:
+          type: integer
+          default: 120
+          description: Maximum artificial delay for late events
+          example: 120
+        duplicate_rate:
+          type: number
+          format: double
+          default: 0.02
+          description: Fraction of duplicate events emitted
+          example: 0.02
+        out_of_order_rate:
+          type: number
+          format: double
+          default: 0.10
+          description: Fraction of out-of-order events
+          example: 0.10
+        malformed_rate:
+          type: number
+          format: double
+          default: 0.01
+          description: Fraction of corrupted/malformed JSON events
+          example: 0.01
+        payment_failure_rate:
+          type: number
+          format: double
+          default: 0.15
+          description: Fraction of payment transactions that fail
+          example: 0.15
+        cancellation_rate:
+          type: number
+          format: double
+          default: 0.05
+          description: Fraction of orders cancelled
+          example: 0.05
+        seed:
+          type: integer
+          format: int64
+          default: 42
+          description: Random generator seed for reproducible test runs
+          example: 42
+        bootstrap_servers:
+          type: string
+          default: "localhost:9092"
+          description: Kafka bootstrap server address
+          example: "localhost:9092"
+
+    SimulatorStatus:
+      type: object
+      properties:
+        is_running:
+          type: boolean
+          example: true
+        current_tps:
+          type: integer
+          example: 100
+        total_events_emitted:
+          type: integer
+          format: int64
+          example: 24500
+        active_orders:
+          type: integer
+          example: 350
+        late_events_emitted:
+          type: integer
+          example: 1225
+        duplicates_emitted:
+          type: integer
+          example: 490
+        malformed_emitted:
+          type: integer
+          example: 245
+        uptime_seconds:
+          type: integer
+          example: 245
+
+    # ─── REPLAY REQUEST / RESPONSE ───────────────────────────────────────────
+    ReplayDlqRequest:
+      type: object
+      required:
+        - target_topic
+      properties:
+        target_topic:
+          type: string
+          description: Kafka topic to receive replayed events
+          example: "orders"
+        error_category:
+          $ref: '#/components/schemas/ErrorCategory'
+          description: Optional filter to replay only specific error category
+        ids:
+          type: array
+          items:
+            type: integer
+          description: Specific DLQ IDs to replay (if empty, replays according to filter)
+          example: [1042, 1043, 1045]
+        limit:
+          type: integer
+          default: 100
+          maximum: 500
+
+    ReplayDlqResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "COMPLETED"
+        replayed_count:
+          type: integer
+          example: 3
+        target_topic:
+          type: string
+          example: "orders"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-08-27T10:40:00.000Z"
+
+    # ─── PIPELINE & FLINK SCHEMAS ────────────────────────────────────────────
+    PipelineHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [HEALTHY, DEGRADED, DOWN]
+          example: "HEALTHY"
+        components:
+          type: object
+          properties:
+            kafka:
+              type: object
+              properties:
+                status:
+                  type: string
+                  example: "UP"
+                bootstrap_servers:
+                  type: string
+                  example: "localhost:9092"
+                topics_ready:
+                  type: array
+                  items:
+                    type: string
+                  example: ["orders", "payments", "customer-events", "dlq", "alerts", "metrics-output"]
+            postgres:
+              type: object
+              properties:
+                status:
+                  type: string
+                  example: "UP"
+                active_connections:
+                  type: integer
+                  example: 3
+                max_pool_size:
+                  type: integer
+                  example: 5
+            flink:
+              type: object
+              properties:
+                status:
+                  type: string
+                  example: "UP"
+                version:
+                  type: string
+                  example: "2.2.1"
+                taskmanagers:
+                  type: integer
+                  example: 1
+                slots_total:
+                  type: integer
+                  example: 2
+                slots_available:
+                  type: integer
+                  example: 0
+
+    FlinkJob:
+      type: object
+      properties:
+        jid:
+          type: string
+          example: "70a9310d5402928509c9164c0e64ff4b"
+        name:
+          type: string
+          example: "EnterpriseStreamingOrderIntelligencePipeline"
+        state:
+          type: string
+          enum: [RUNNING, CANCELED, FINISHED, FAILING, FAILED]
+          example: "RUNNING"
+        start_time:
+          type: integer
+          format: int64
+          example: 1787728800000
+        duration_ms:
+          type: integer
+          format: int64
+          example: 3600000
+
+    PipelineMetrics:
+      type: object
+      properties:
+        job_id:
+          type: string
+          example: "70a9310d5402928509c9164c0e64ff4b"
+        records_in_per_sec:
+          type: number
+          format: double
+          example: 104.2
+        records_out_per_sec:
+          type: number
+          format: double
+          example: 98.6
+        consumer_lag_records:
+          type: integer
+          example: 12
+        watermark_delay_ms:
+          type: integer
+          example: 850
+        last_checkpoint_duration_ms:
+          type: integer
+          example: 142
+        last_checkpoint_size_bytes:
+          type: integer
+          format: int64
+          example: 1048576
+
+    # ─── SCHEMA METADATA ─────────────────────────────────────────────────────
+    EventSchemaMetadata:
+      type: object
+      properties:
+        event_type:
+          $ref: '#/components/schemas/EventType'
+        default_topic:
+          type: string
+          example: "orders"
+        schema_version:
+          type: string
+          example: "1.0"
+        description:
+          type: string
+          example: "Order creation domain event"
+
+    # ─── GENERIC RESPONSES ───────────────────────────────────────────────────
+    IngestionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ACCEPTED"
+        event_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        kafka_topic:
+          type: string
+          example: "orders"
+        partition:
+          type: integer
+          example: 0
+        offset:
+          type: integer
+          format: int64
+          example: 49201
+
+    BatchIngestionResponse:
+      type: object
+      properties:
+        total_received:
+          type: integer
+          example: 10
+        total_accepted:
+          type: integer
+          example: 10
+        total_rejected:
+          type: integer
+          example: 0
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/IngestionResponse'
+
+    ErrorResponse:
+      type: object
+      properties:
+        error_code:
+          type: string
+          example: "VALIDATION_FAILED"
+        message:
+          type: string
+          example: "Field 'amount' must be positive and non-null"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2026-08-27T10:15:30.500Z"
+        details:
+          type: array
+          items:
+            type: string
+          example: ["'amount' is required", "'customer_id' cannot be blank"]

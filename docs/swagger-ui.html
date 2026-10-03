@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enterprise Real-Time E-Commerce Order Intelligence API & Event Catalog</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #4361ee;
+      --primary-dark: #3a0ca3;
+      --accent: #4cc9f0;
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: #334155;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #f8fafc;
+      color: #1e293b;
+      min-height: 100vh;
+    }
+
+    .header-banner {
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #31104b 100%);
+      color: #fff;
+      padding: 2.5rem 2rem 2rem 2rem;
+      border-bottom: 3px solid #6366f1;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+    }
+
+    .header-content {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .tech-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #e2e8f0;
+      backdrop-filter: blur(8px);
+    }
+
+    .tech-badge.beam { background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.4); color: #fca5a5; }
+    .tech-badge.flink { background: rgba(249, 115, 22, 0.2); border-color: rgba(249, 115, 22, 0.4); color: #fdba74; }
+    .tech-badge.kafka { background: rgba(59, 130, 246, 0.2); border-color: rgba(59, 130, 246, 0.4); color: #93c5fd; }
+    .tech-badge.postgres { background: rgba(16, 185, 129, 0.2); border-color: rgba(16, 185, 129, 0.4); color: #6ee7b7; }
+
+    .header-title {
+      font-size: 2.25rem;
+      font-weight: 800;
+      letter-spacing: -0.025em;
+      margin-bottom: 0.75rem;
+      background: linear-gradient(to right, #ffffff, #c7d2fe, #e0e7ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header-desc {
+      font-size: 1.05rem;
+      color: #94a3b8;
+      max-width: 900px;
+      line-height: 1.6;
+      margin-bottom: 1.5rem;
+    }
+
+    .nav-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .action-links {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .btn-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: #4f46e5;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #4338ca;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.4);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: #e2e8f0;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    /* Container */
+    #swagger-ui {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    /* Custom Swagger UI tweaks */
+    .swagger-ui .topbar { display: none !important; }
+    .swagger-ui .info { margin-bottom: 2rem; }
+    .swagger-ui .scheme-container {
+      background: #ffffff;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+      border: 1px solid #e2e8f0;
+    }
+    .swagger-ui .opblock {
+      border-radius: 0.5rem;
+      box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+      margin-bottom: 1rem;
+    }
+    .swagger-ui .opblock .opblock-summary {
+      padding: 0.75rem 1rem;
+    }
+    .swagger-ui .opblock-tag {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: #0f172a;
+      border-bottom: 2px solid #e2e8f0;
+      padding-bottom: 0.5rem;
+      margin-top: 2rem;
+    }
+    .swagger-ui code, .swagger-ui .microlight {
+      font-family: 'JetBrains Mono', monospace !important;
+    }
+  </style>
+</head>
+<body>
+
+  <header class="header-banner">
+    <div class="header-content">
+      <div class="badge-row">
+        <span class="tech-badge beam">Apache Beam 2.75.0</span>
+        <span class="tech-badge flink">Apache Flink 2.2.1</span>
+        <span class="tech-badge kafka">Apache Kafka 4.3.1</span>
+        <span class="tech-badge postgres">PostgreSQL 17.10</span>
+        <span class="tech-badge">Java 17 LTS</span>
+        <span class="tech-badge">OpenAPI 3.1.0</span>
+      </div>
+      <h1 class="header-title">Real-Time E-Commerce Order Intelligence API</h1>
+      <p class="header-desc">
+        Interactive OpenAPI / Swagger documentation and Event Schema Catalog for real-time Kafka event streaming, stateful fraud scoring, 5-minute tumbling revenue aggregations, DLQ inspection/replaying, and synthetic traffic simulation.
+      </p>
+      <div class="nav-bar">
+        <div class="action-links">
+          <a href="./openapi.yaml" download="openapi.yaml" class="btn-link btn-primary">
+            <svg width="16" height="16" fill="currentColor" viewBox="0 0 20 20"><path d="M10.75 2.75a.75.75 0 00-1.5 0v8.614L6.295 8.235a.75.75 0 10-1.09 1.03l4.25 4.5a.75.75 0 001.09 0l4.25-4.5a.75.75 0 00-1.09-1.03l-2.955 3.129V2.75z"/><path d="M3.5 12.75a.75.75 0 00-1.5 0v2.5A2.75 2.75 0 004.75 18h10.5A2.75 2.75 0 0018 15.25v-2.5a.75.75 0 00-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5z"/></svg>
+            Download OpenAPI YAML
+          </a>
+          <a href="./DESIGN.md" class="btn-link btn-secondary">Architecture Design</a>
+          <a href="./ENTERPRISE_DEPLOYMENT.md" class="btn-link btn-secondary">Enterprise Deployment</a>
+          <a href="./technology-versions.md" class="btn-link btn-secondary">Tech Versions</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div id="swagger-ui"></div>
+  </main>
+
+  <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-bundle.js" crossorigin></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.18.2/swagger-ui-standalone-preset.js" crossorigin></script>
+  <script>
+    window.onload = function() {
+      const ui = SwaggerUIBundle({
+        url: "./openapi.yaml",
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIStandalonePreset
+        ],
+        plugins: [
+          SwaggerUIBundle.plugins.DownloadUrl
+        ],
+        layout: "BaseLayout",
+        defaultModelsExpandDepth: 2,
+        defaultModelExpandDepth: 2,
+        docExpansion: "list",
+        filter: true,
+        showExtensions: true,
+        showCommonExtensions: true,
+        syntaxHighlight: {
+          activate: true,
+          theme: "monokai"
+        }
+      });
+      window.ui = ui;
+    };
+  </script>
+</body>
+</html>

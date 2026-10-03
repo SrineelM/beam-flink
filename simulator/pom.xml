@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.enterprise.beam</groupId>
+    <artifactId>beam-flink-platform</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>simulator</artifactId>
+  <name>Simulator — High-Throughput Synthetic Event Generator</name>
+  <description>
+    Java CLI tool for publishing synthetic real-time e-commerce events to Kafka.
+    Supports configurable event distribution, fault injection (duplicates, late events,
+    malformed JSON), and targeted rates (up to 50,000 events/sec).
+  </description>
+
+  <properties>
+    <mainClass>com.enterprise.beam.simulator.Simulator</mainClass>
+  </properties>
+
+  <dependencies>
+    <!-- Internal core module -->
+    <dependency>
+      <groupId>com.enterprise.beam</groupId>
+      <artifactId>platform-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!-- Kafka client -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+    </dependency>
+
+    <!-- Picocli for CLI argument parsing -->
+    <dependency>
+      <groupId>info.picocli</groupId>
+      <artifactId>picocli</artifactId>
+    </dependency>
+
+    <!-- Testing -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+
+</project>

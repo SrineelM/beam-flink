@@ -1,0 +1,580 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+  <modelVersion>4.0.0</modelVersion>
+
+  <!-- ============================================================
+       GROUP / ARTIFACT / VERSION
+       All three modules share this parent for consistent versioning.
+       Never change a version in a child POM — change it here.
+       ============================================================ -->
+  <groupId>com.enterprise.beam</groupId>
+  <artifactId>beam-flink-platform</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>Enterprise Beam + Flink Platform</name>
+  <description>
+    Real-time e-commerce order intelligence platform using Apache Beam 2.75.0
+    running on Apache Flink 2.2.1. Designed for 50,000 events/sec in production.
+    Local development: 8GB Mac without Docker, process-based services.
+  </description>
+
+  <!-- ============================================================
+       MODULES
+       platform-core must be listed first because pipeline and
+       simulator depend on it. Maven respects module declaration order.
+       ============================================================ -->
+  <modules>
+    <module>platform-core</module>
+    <module>pipeline</module>
+    <module>simulator</module>
+  </modules>
+
+  <!-- ============================================================
+       PROPERTIES — ALL VERSION NUMBERS LIVE HERE
+       Research date: 2026-08-10. All versions verified against
+       official release pages. No floating versions.
+       ============================================================ -->
+  <properties>
+    <!-- Java -->
+    <java.version>17</java.version>
+    <maven.compiler.source>17</maven.compiler.source>
+    <maven.compiler.target>17</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+    <!-- Apache Beam — 2.75.0 is the latest stable as of 2026-07-08.
+         This version adds Flink 2.1 and 2.2 runner support.
+         It drops support for Flink 1.17 and 1.18. -->
+    <beam.version>2.75.0</beam.version>
+
+    <!-- Apache Flink — 2.2.1 is the newest minor version confirmed
+         compatible with Beam 2.75.0. Flink 2.3.0 is NOT yet in the
+         Beam capability matrix and is therefore excluded. -->
+    <flink.version>2.2.1</flink.version>
+
+    <!-- Apache Kafka — 4.3.1 is the latest stable (2026-06-25).
+         KRaft-only: ZooKeeper dependency is completely removed.
+         kafka-clients 4.x is required for KRaft broker compatibility. -->
+    <kafka.version>4.3.1</kafka.version>
+
+    <!-- Jackson — 2.18.2 is the latest stable in the 2.18.x series.
+         Beam's BOM also manages Jackson; we declare it here to ensure
+         no module accidentally pulls an older version. -->
+    <jackson.version>2.18.2</jackson.version>
+
+    <!-- PostgreSQL JDBC — 42.7.4 is the latest stable driver.
+         Supports JDBC 4.2, required for Java 17 compatibility.
+         DO NOT use older 42.x versions: they have known CVEs. -->
+    <postgresql.version>42.7.4</postgresql.version>
+
+    <!-- HikariCP — 5.1.0 is the latest stable connection pool.
+         Required for the PostgreSQL sink's connection pooling. -->
+    <hikaricp.version>5.1.0</hikaricp.version>
+
+    <!-- Logback — 1.5.12 is the latest stable.
+         Used with logstash-logback-encoder for structured JSON logs. -->
+    <logback.version>1.5.12</logback.version>
+
+    <!-- logstash-logback-encoder — 8.0 adds support for Logback 1.5.x.
+         Older versions (7.x) are not compatible with Logback 1.5.x. -->
+    <logstash.encoder.version>8.0</logstash.encoder.version>
+
+    <!-- OpenTelemetry Java SDK — 1.44.1 is the latest stable (2026-Q3).
+         Used for span creation and trace propagation within the JVM.
+         LAPTOP_CONSTRAINT: OTel Collector not running locally. Spans
+         are exported to console via OTLP_EXPORTER_ENDPOINT=stdout. -->
+    <otel.version>1.44.1</otel.version>
+
+    <!-- JUnit 5 — 5.10.3 is the latest stable. Used for all tests. -->
+    <junit.version>5.10.3</junit.version>
+
+    <!-- AWS SDK v2 — 2.26.31 is the latest stable S3 client.
+         Used for object storage writes. Works with AWS S3, MinIO,
+         GCS HMAC, and Cloudflare R2 via endpoint override.
+         This is how we achieve provider-agnostic object storage. -->
+    <awssdk.version>2.26.31</awssdk.version>
+
+    <!-- picocli — 4.7.6 is the latest stable CLI framework.
+         Used in the simulator for command-line argument parsing. -->
+    <picocli.version>4.7.6</picocli.version>
+
+    <!-- SLF4J — 2.0.16 is required to bridge legacy logging frameworks
+         to Logback 1.5.x. Beam and Flink use SLF4J internally. -->
+    <slf4j.version>2.0.16</slf4j.version>
+
+    <!-- Avro — 1.11.4 is the latest in the 1.11.x series.
+         Used for schema definitions and Beam's AvroIO.
+         Schema evolution is discussed in docs/event-contracts.md. -->
+    <avro.version>1.11.4</avro.version>
+
+    <!-- ==================== MAVEN PLUGIN VERSIONS ==================== -->
+    <!-- Pinned separately from dependencies. Plugin version drift causes
+         build non-reproducibility independent of dependency drift. -->
+    <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
+    <maven.shade.plugin.version>3.6.0</maven.shade.plugin.version>
+    <maven.surefire.plugin.version>3.3.1</maven.surefire.plugin.version>
+    <maven.failsafe.plugin.version>3.3.1</maven.failsafe.plugin.version>
+    <maven.checkstyle.plugin.version>3.4.0</maven.checkstyle.plugin.version>
+    <spotbugs.maven.plugin.version>4.8.6.2</spotbugs.maven.plugin.version>
+    <jacoco.maven.plugin.version>0.8.12</jacoco.maven.plugin.version>
+    <maven.source.plugin.version>3.3.1</maven.source.plugin.version>
+    <maven.javadoc.plugin.version>3.10.1</maven.javadoc.plugin.version>
+  </properties>
+
+  <!-- ============================================================
+       DEPENDENCY MANAGEMENT
+       This section declares versions for ALL dependencies used
+       anywhere in the project. Child modules MUST NOT declare
+       versions — they inherit from here.
+
+       Import order: Beam BOM first, then explicit overrides.
+       The Beam BOM manages Jackson, Avro, Guava, and gRPC versions.
+       We import it first so explicit overrides below take precedence.
+       ============================================================ -->
+  <dependencyManagement>
+    <dependencies>
+
+      <!-- =========================================================
+           BEAM BOM — imports version management for all beam-* artifacts
+           and their transitive dependencies (Jackson, Avro, Guava, gRPC).
+           This is the recommended approach per Beam documentation.
+           ========================================================= -->
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-bom</artifactId>
+        <version>${beam.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- AWS SDK v2 BOM — manages all software.amazon.awssdk:* versions.
+           Import after Beam BOM to override any conflicting aws versions. -->
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${awssdk.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+
+      <!-- =========================================================
+           APACHE BEAM — Core SDK and I/O connectors
+           ========================================================= -->
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-core</artifactId>
+        <version>${beam.version}</version>
+      </dependency>
+
+      <!-- Flink runner for Flink 2.2.x.
+           IMPORTANT: The artifact ID suffix must match the Flink minor version.
+           beam-runners-flink-2.2 targets Flink 2.2.x.
+           Using the wrong suffix causes ClassNotFoundException at runtime. -->
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-runners-flink-2.2</artifactId>
+        <version>${beam.version}</version>
+      </dependency>
+
+      <!-- Direct runner — used for local testing and CI without a Flink cluster.
+           Always keep this in test/compile scope so unit tests can run on DirectRunner. -->
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-runners-direct-java</artifactId>
+        <version>${beam.version}</version>
+      </dependency>
+
+      <!-- Kafka I/O — provides KafkaIO.read() and KafkaIO.write().
+           This is the native Java Kafka connector for Beam.
+           No cross-language overhead like the Python SDK requires. -->
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-io-kafka</artifactId>
+        <version>${beam.version}</version>
+      </dependency>
+
+      <!-- Avro extensions for Beam — provides AvroIO and Avro coder support. -->
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-extensions-avro</artifactId>
+        <version>${beam.version}</version>
+      </dependency>
+
+      <!-- =========================================================
+           APACHE FLINK — provided scope in pipeline module
+           Flink JARs are available on the Flink cluster classpath.
+           We mark them provided so the fat JAR doesn't bundle them.
+           LAPTOP_CONSTRAINT: For local DirectRunner tests, these are
+           not needed. For FlinkRunner on local standalone Flink, they
+           must be on the Flink lib/ path (they are, by default).
+           ========================================================= -->
+      <dependency>
+        <groupId>org.apache.flink</groupId>
+        <artifactId>flink-streaming-java</artifactId>
+        <version>${flink.version}</version>
+        <scope>provided</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.flink</groupId>
+        <artifactId>flink-clients</artifactId>
+        <version>${flink.version}</version>
+        <scope>provided</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.flink</groupId>
+        <artifactId>flink-runtime</artifactId>
+        <version>${flink.version}</version>
+        <scope>provided</scope>
+      </dependency>
+
+      <!-- =========================================================
+           APACHE KAFKA CLIENT
+           ========================================================= -->
+      <dependency>
+        <groupId>org.apache.kafka</groupId>
+        <artifactId>kafka-clients</artifactId>
+        <version>${kafka.version}</version>
+      </dependency>
+
+      <!-- =========================================================
+           JACKSON — JSON serialization/deserialization
+           Beam BOM manages these, but we declare explicitly to ensure
+           no transitive dependency pulls an older version.
+           ========================================================= -->
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>${jackson.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-annotations</artifactId>
+        <version>${jackson.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.datatype</groupId>
+        <artifactId>jackson-datatype-jsr310</artifactId>
+        <version>${jackson.version}</version>
+      </dependency>
+
+      <!-- =========================================================
+           POSTGRESQL + CONNECTION POOL
+           ========================================================= -->
+      <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+        <version>${postgresql.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.zaxxer</groupId>
+        <artifactId>HikariCP</artifactId>
+        <version>${hikaricp.version}</version>
+      </dependency>
+
+      <!-- =========================================================
+           LOGGING — Logback + SLF4J + logstash-logback-encoder
+           logstash-logback-encoder 8.0 requires Logback 1.5.x.
+           Do not mix Logback 1.4.x with logstash-encoder 8.x.
+           ========================================================= -->
+      <dependency>
+        <groupId>ch.qos.logback</groupId>
+        <artifactId>logback-classic</artifactId>
+        <version>${logback.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>${slf4j.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>net.logstash.logback</groupId>
+        <artifactId>logstash-logback-encoder</artifactId>
+        <version>${logstash.encoder.version}</version>
+      </dependency>
+
+      <!-- =========================================================
+           OPENTELEMETRY
+           ========================================================= -->
+      <dependency>
+        <groupId>io.opentelemetry</groupId>
+        <artifactId>opentelemetry-api</artifactId>
+        <version>${otel.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.opentelemetry</groupId>
+        <artifactId>opentelemetry-sdk</artifactId>
+        <version>${otel.version}</version>
+      </dependency>
+
+      <!-- =========================================================
+           AWS SDK v2 — S3 client (managed by AWS BOM above)
+           ========================================================= -->
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>s3</artifactId>
+      </dependency>
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>netty-nio-client</artifactId>
+      </dependency>
+
+      <!-- =========================================================
+           PICOCLI — CLI framework for simulator
+           ========================================================= -->
+      <dependency>
+        <groupId>info.picocli</groupId>
+        <artifactId>picocli</artifactId>
+        <version>${picocli.version}</version>
+      </dependency>
+
+      <!-- =========================================================
+           AVRO
+           ========================================================= -->
+      <dependency>
+        <groupId>org.apache.avro</groupId>
+        <artifactId>avro</artifactId>
+        <version>${avro.version}</version>
+      </dependency>
+
+      <!-- =========================================================
+           TESTING
+           ========================================================= -->
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <version>${junit.version}</version>
+        <scope>test</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter-api</artifactId>
+        <version>${junit.version}</version>
+        <scope>test</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter-engine</artifactId>
+        <version>${junit.version}</version>
+        <scope>test</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter-params</artifactId>
+        <version>${junit.version}</version>
+        <scope>test</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.mockito</groupId>
+        <artifactId>mockito-junit-jupiter</artifactId>
+        <version>5.12.0</version>
+        <scope>test</scope>
+      </dependency>
+      <!-- Kafka test utils — embedded Kafka without Docker.
+           Must match kafka.version exactly to avoid broker/client protocol mismatch. -->
+      <dependency>
+        <groupId>org.apache.kafka</groupId>
+        <artifactId>kafka-streams-test-utils</artifactId>
+        <version>${kafka.version}</version>
+        <scope>test</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <!-- ============================================================
+       PLUGIN MANAGEMENT
+       All build plugins are pinned here. Child POMs reference the
+       plugin groupId:artifactId and inherit the version from here.
+       ============================================================ -->
+  <build>
+    <pluginManagement>
+      <plugins>
+
+        <!-- Compiler: Java 17, fail on warnings in production code -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>${maven.compiler.plugin.version}</version>
+          <configuration>
+            <release>17</release>
+            <compilerArgs>
+              <arg>-Xlint:none</arg>
+            </compilerArgs>
+            <showWarnings>true</showWarnings>
+          </configuration>
+        </plugin>
+
+        <!-- Surefire: runs JUnit 5 unit tests.
+             Fork count 1 avoids OOM on 8GB laptop.
+             ENTERPRISE_UPGRADE: Increase forkCount to 2 on CI runners with >=16GB RAM. -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>${maven.surefire.plugin.version}</version>
+          <configuration>
+            <forkCount>1</forkCount>
+            <reuseForks>true</reuseForks>
+            <!-- Exclude integration tests from unit test run -->
+            <excludes>
+              <exclude>**/*IT.java</exclude>
+              <exclude>**/*IntegrationTest.java</exclude>
+            </excludes>
+          </configuration>
+        </plugin>
+
+        <!-- Failsafe: runs integration tests (*IT.java) separately.
+             Activated by -Pintegration-test profile. -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-failsafe-plugin</artifactId>
+          <version>${maven.failsafe.plugin.version}</version>
+          <executions>
+            <execution>
+              <goals>
+                <goal>integration-test</goal>
+                <goal>verify</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
+
+        <!-- Shade: creates a fat JAR that bundles all dependencies.
+             Required for submitting to Flink cluster (Flink needs one self-contained JAR).
+             Flink runtime dependencies are excluded (scope=provided). -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-shade-plugin</artifactId>
+          <version>${maven.shade.plugin.version}</version>
+          <executions>
+            <execution>
+              <phase>package</phase>
+              <goals><goal>shade</goal></goals>
+              <configuration>
+                <createDependencyReducedPom>false</createDependencyReducedPom>
+                <filters>
+                  <!-- Remove signature files from bundled JARs.
+                       Without this, the JVM rejects the signed JARs bundled inside the fat JAR. -->
+                  <filter>
+                    <artifact>*:*</artifact>
+                    <excludes>
+                      <exclude>META-INF/*.SF</exclude>
+                      <exclude>META-INF/*.DSA</exclude>
+                      <exclude>META-INF/*.RSA</exclude>
+                    </excludes>
+                  </filter>
+                </filters>
+                <transformers>
+                  <!-- ServicesResourceTransformer merges META-INF/services/* files.
+                       Without this, only one implementation is registered when multiple
+                       JARs provide the same service (e.g., Jackson modules). -->
+                  <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                  <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                    <mainClass>${mainClass}</mainClass>
+                  </transformer>
+                </transformers>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+
+        <!-- Checkstyle: enforces Google Java Style.
+             checkstyle.xml in root configures the ruleset.
+             Runs during validate phase — fails build on violations. -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-checkstyle-plugin</artifactId>
+          <version>${maven.checkstyle.plugin.version}</version>
+          <configuration>
+            <configLocation>${project.basedir}/../checkstyle.xml</configLocation>
+            <failsOnError>true</failsOnError>
+            <consoleOutput>true</consoleOutput>
+            <includeTestSourceDirectory>false</includeTestSourceDirectory>
+          </configuration>
+        </plugin>
+
+        <!-- SpotBugs: static analysis for common Java bugs.
+             exclusions in spotbugs-exclusions.xml for known false positives. -->
+        <plugin>
+          <groupId>com.github.spotbugs</groupId>
+          <artifactId>spotbugs-maven-plugin</artifactId>
+          <version>${spotbugs.maven.plugin.version}</version>
+          <configuration>
+            <effort>Max</effort>
+            <threshold>Low</threshold>
+            <excludeFilterFile>${project.basedir}/../spotbugs-exclusions.xml</excludeFilterFile>
+          </configuration>
+        </plugin>
+
+        <!-- JaCoCo: code coverage.
+             Coverage report generated during test phase.
+             make coverage-report opens ./target/site/jacoco/index.html -->
+        <plugin>
+          <groupId>org.jacoco</groupId>
+          <artifactId>jacoco-maven-plugin</artifactId>
+          <version>${jacoco.maven.plugin.version}</version>
+          <executions>
+            <execution>
+              <id>prepare-agent</id>
+              <goals><goal>prepare-agent</goal></goals>
+            </execution>
+            <execution>
+              <id>report</id>
+              <phase>test</phase>
+              <goals><goal>report</goal></goals>
+            </execution>
+            <execution>
+              <id>check</id>
+              <goals><goal>check</goal></goals>
+              <configuration>
+                <rules>
+                  <rule>
+                    <element>BUNDLE</element>
+                    <limits>
+                      <!-- Target: 80% line coverage on transforms.
+                           We enforce this here rather than leave it aspirational. -->
+                      <limit>
+                        <counter>LINE</counter>
+                        <value>COVEREDRATIO</value>
+                        <minimum>0.70</minimum>
+                      </limit>
+                    </limits>
+                  </rule>
+                </rules>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+
+      </plugins>
+    </pluginManagement>
+  </build>
+
+  <!-- ============================================================
+       PROFILES
+       ============================================================ -->
+  <profiles>
+
+    <!-- integration-test: runs *IT.java tests against local services.
+         Usage: mvn verify -Pintegration-test
+         Requires local Kafka + PostgreSQL running.
+         LAPTOP_CONSTRAINT: No Docker, so services must be started manually.
+         See: make kafka-start && make postgres-start before running. -->
+    <profile>
+      <id>integration-test</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-failsafe-plugin</artifactId>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+  </profiles>
+
+</project>
